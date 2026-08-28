@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Pizzaria Chama Nós — Banco de Dados</title>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --card: #ffffff;
+    --border: #dedad0;
+    --text: #2c2c2a;
+    --text-muted: #6b6a63;
+    --accent: #9a3324;
+    --accent-light: #f0e2dd;
+    --mono: 'Courier New', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 20px;
+  }
+  .status {
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: var(--accent-light);
+    color: var(--accent);
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+  .status.ready { background: #e3ede0; color: #2f5c2a; }
+  .status.error { background: #f5dede; color: #8a2020; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .metric {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .metric .label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .metric .value {
+    font-size: 22px;
+    font-weight: 600;
+  }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+  .row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  select, button, textarea {
+    font-family: inherit;
+    font-size: 14px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: white;
+  }
+  button {
+    cursor: pointer;
+    background: var(--accent);
+    color: white;
+    border: none;
+    font-weight: 500;
+  }
+  button.secondary {
+    background: white;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button:hover { opacity: 0.9; }
+  textarea {
+    width: 100%;
+    min-height: 70px;
+    resize: vertical;
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+    margin-top: 10px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  th {
+    background: #f0ede4;
+    position: sticky;
+    top: 0;
+  }
+  .table-wrap {
+    overflow: auto;
+    max-height: 420px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .quick-queries button {
+    background: white;
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-weight: 400;
+  }
+</style>
+</head>
+<body>
+
+<h1>Pizzaria Chama Nós — Banco de Dados</h1>
+<p class="subtitle">Banco SQLite completo rodando direto no seu navegador — nenhum programa instalado, nenhum dado sai do seu computador.</p>
+
+<div id="status" class="status">Carregando o motor do banco de dados...</div>
+
+<div class="grid" id="metrics" style="display:none;"></div>
+
+<div class="panel" id="tableBrowserPanel" style="display:none;">
+  <h2>Ver tabelas</h2>
+  <div class="row">
+    <select id="tableSelect"></select>
+    <button class="secondary" onclick="browseTable()">Mostrar dados</button>
+  </div>
+  <div class="table-wrap" id="browseResult"></div>
+</div>
+
+<div class="panel" id="queryPanel" style="display:none;">
+  <h2>Consultas prontas (para a apresentação)</h2>
+  <div class="row quick-queries">
+    <button onclick="runPreset('tipos')">Pedidos por tipo (delivery x retirada)</button>
+    <button onclick="runPreset('vendas_mes')">Total vendido no mês</button>
+    <button onclick="runPreset('estoque')">Estoque atual de ingredientes</button>
+    <button onclick="runPreset('debito')">Consumo de ingredientes por vendas</button>
+    <button onclick="runPreset('top_sabores')">Sabores mais pedidos</button>
+  </div>
+  <h2>Ou escreva sua própria consulta SQL</h2>
+  <textarea id="sqlInput" placeholder="SELECT * FROM Cliente LIMIT 10;"></textarea>
+  <div class="row" style="margin-top:8px;">
+    <button onclick="runCustomQuery()">Executar consulta</button>
+  </div>
+  <div class="table-wrap" id="queryResult"></div>
+</div>
+
+<div class="panel" id="adminPanel" style="display:none;">
+  <h2>Painel do administrador — Estoque de ingredientes</h2>
+
+  <div class="table-wrap" id="ingredientesTable" style="margin-bottom:16px;"></div>
+
+  <h2>Cadastrar novo ingrediente</h2>
+  <div class="row">
+    <input id="novoIngNome" type="text" placeholder="Nome do ingrediente">
+    <input id="novoIngPeso" type="number" step="0.01" placeholder="Peso por saquinho (g)" style="width:170px;">
+    <input id="novoIngQtd" type="number" placeholder="Qtd. de saquinhos em estoque" style="width:190px;">
+    <button onclick="cadastrarIngrediente()">Cadastrar ingrediente</button>
+  </div>
+  <div id="adminMsg"></div>
+
+  <h2 style="margin-top:18px;">Repor estoque de um ingrediente existente</h2>
+  <div class="row">
+    <select id="reporIngSelect"></select>
+    <input id="reporQtd" type="number" placeholder="Quantidade de saquinhos a adicionar" style="width:220px;">
+    <button onclick="reporEstoque()">Adicionar ao estoque</button>
+  </div>
+</div>
+
+<div class="panel" id="pedidoPanel" style="display:none;">
+  <h2>Fazer pedido (visão do cliente)</h2>
+
+  <div class="row">
+    <input id="pedNome" type="text" placeholder="Nome do cliente" style="min-width:180px;">
+    <input id="pedTelefone" type="text" placeholder="Telefone, ex: (11) 91234-5678" style="min-width:200px;">
+  </div>
+  <div class="row">
+    <select id="pedTipo" onchange="toggleEndereco()">
+      <option value="delivery">Delivery (entrega)</option>
+      <option value="retirada">Retirada no balcão</option>
+    </select>
+    <input id="pedEndereco" type="text" placeholder="Endereço de entrega" style="min-width:260px;">
+    <select id="pedPagamento">
+      <option value="pix">Pix</option>
+      <option value="cartao">Cartão</option>
+      <option value="dinheiro">Dinheiro</option>
+    </select>
+  </div>
+
+  <h2 style="margin-top:16px;">Itens do pedido</h2>
+  <div class="row">
+    <select id="itemSabor"></select>
+    <select id="itemTamanho">
+      <option value="broto">Broto</option>
+      <option value="medio">Médio</option>
+      <option value="grande">Grande</option>
+    </select>
+    <input id="itemQtd" type="number" min="1" value="1" style="width:80px;">
+    <button class="secondary" onclick="adicionarItemCarrinho()">Adicionar item</button>
+  </div>
+  <div class="table-wrap" id="carrinhoTable" style="max-height:200px;"></div>
+
+  <div class="row" style="margin-top:12px;">
+    <button onclick="finalizarPedido()">Confirmar pedido</button>
+  </div>
+  <div id="pedidoMsg"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+<script>
+let db;
+const statusEl = document.getElementById('status');
+
+const NOMES = ["Ana","Bruno","Carla","Daniel","Elaine","Felipe","Gabriela","Henrique","Isabela","João",
+"Karina","Lucas","Mariana","Nicolas","Otavio","Patricia","Rafael","Sabrina","Thiago","Vanessa",
+"Camila","Diego","Eduarda","Fabio","Giovanna","Hugo","Ingrid","Jonas","Larissa","Mateus"];
+const SOBRENOMES = ["Silva","Souza","Oliveira","Santos","Pereira","Costa","Rodrigues","Almeida","Nascimento","Lima",
+"Araujo","Fernandes","Carvalho","Gomes","Martins","Rocha","Ribeiro","Alves","Monteiro","Cardoso"];
+const RUAS = ["Rua das Flores","Av. Brasil","Rua Sete de Setembro","Rua XV de Novembro","Av. Paulista",
+"Rua dos Pinheiros","Rua Barão do Rio Branco","Av. Getúlio Vargas","Rua São João","Rua Marechal Deodoro"];
+
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+function nomeFicticio(){ return `${pick(NOMES)} ${pick(SOBRENOMES)}`; }
+function telefoneFicticio(){ return `(11) 9${randInt(1000,9999)}-${randInt(1000,9999)}`; }
+function enderecoFicticio(){ return `${pick(RUAS)}, ${randInt(10,999)}`; }
+function pad(n){ return n.toString().padStart(2,'0'); }
+function dataAleatoria(){
+  const dia = randInt(1,26), hora = randInt(18,23), min = randInt(0,59);
+  return `2026-08-${pad(dia)} ${pad(hora)}:${pad(min)}:00`;
+}
+
+async function init(){
+  try {
+    const SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` });
+    db = new SQL.Database();
+    buildSchema();
+    seedData();
+    statusEl.textContent = "Banco carregado e funcionando! 180 clientes fictícios já gerados.";
+    statusEl.className = "status ready";
+    showMetrics();
+    populateTableSelect();
+    document.getElementById('tableBrowserPanel').style.display = 'block';
+    document.getElementById('queryPanel').style.display = 'block';
+
+    renderIngredientesTable();
+    populateReporSelect();
+    populateItemSaborSelect();
+    toggleEndereco();
+    document.getElementById('adminPanel').style.display = 'block';
+    document.getElementById('pedidoPanel').style.display = 'block';
+  } catch (e) {
+    statusEl.textContent = "Erro ao carregar: " + e.message;
+    statusEl.className = "status error";
+  }
+}
+
+function buildSchema(){
+  db.run(`
+    CREATE TABLE Cliente (id_cliente INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, telefone TEXT, endereco TEXT);
+    CREATE TABLE Funcionario (id_funcionario INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, funcao TEXT NOT NULL);
+    CREATE TABLE Sabor (id_sabor INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, preco REAL NOT NULL);
+    CREATE TABLE Ingrediente (id_ingrediente INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, peso_saquinho_padrao REAL NOT NULL, quantidade_saquinhos_estoque INTEGER NOT NULL);
+    CREATE TABLE ComposicaoSabor (id_composicao INTEGER PRIMARY KEY AUTOINCREMENT, id_sabor INTEGER NOT NULL, id_ingrediente INTEGER NOT NULL, qtd_saquinhos_usados INTEGER NOT NULL);
+    CREATE TABLE Pedido (id_pedido INTEGER PRIMARY KEY AUTOINCREMENT, id_cliente INTEGER NOT NULL, data_hora TEXT NOT NULL, tipo TEXT NOT NULL, status TEXT NOT NULL, valor_total REAL);
+    CREATE TABLE ItemPedido (id_item INTEGER PRIMARY KEY AUTOINCREMENT, id_pedido INTEGER NOT NULL, id_sabor INTEGER NOT NULL, tamanho TEXT NOT NULL, quantidade INTEGER NOT NULL, preco_unitario REAL NOT NULL);
+    CREATE TABLE Entrega (id_entrega INTEGER PRIMARY KEY AUTOINCREMENT, id_pedido INTEGER NOT NULL UNIQUE, id_funcionario INTEGER NOT NULL, horario_saida TEXT, horario_chegada TEXT, endereco_entrega TEXT);
+    CREATE TABLE Pagamento (id_pagamento INTEGER PRIMARY KEY AUTOINCREMENT, id_pedido INTEGER NOT NULL UNIQUE, forma_pagamento TEXT NOT NULL, valor_pago REAL NOT NULL, data_pagamento TEXT);
+  `);
+}
+
+function seedData(){
+  db.run(`INSERT INTO Funcionario (nome, funcao) VALUES
+    ('Marcos Silva','motoboy'), ('Renato Costa','motoboy'),
+    ('Patricia Gomes','atendente'), ('Bruno Tavares','cozinheiro');`);
+
+  db.run(`INSERT INTO Sabor (nome, preco) VALUES
+    ('Calabresa',35.00), ('Mussarela',32.00), ('Frango com Catupiry',38.00),
+    ('Carne Seca',42.00), ('Portuguesa',40.00);`);
+
+  db.run(`INSERT INTO Ingrediente (nome, peso_saquinho_padrao, quantidade_saquinhos_estoque) VALUES
+    ('Calabresa',150,400), ('Mussarela',200,500), ('Frango',150,300),
+    ('Carne',120,250), ('Presunto/Ovo/Ervilha',150,300);`);
+
+  db.run(`INSERT INTO ComposicaoSabor (id_sabor, id_ingrediente, qtd_saquinhos_usados) VALUES
+    (1,1,2),(1,2,2),(2,2,2),(3,3,1),(3,2,1),(4,4,1),(4,2,1),(5,5,1),(5,2,1);`);
+
+  const sabores = [[1,35.00],[2,32.00],[3,38.00],[4,42.00],[5,40.00]];
+  const tamanhos = ["broto","medio","grande"];
+  const formasPagamento = ["pix","cartao","dinheiro"];
+
+  function criarClientePedido(tipo){
+    const nome = nomeFicticio();
+    const telefone = telefoneFicticio();
+    const endereco = tipo === 'delivery' ? enderecoFicticio() : null;
+    db.run(`INSERT INTO Cliente (nome, telefone, endereco) VALUES (?,?,?);`, [nome, telefone, endereco]);
+    const idCliente = db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+
+    const dataHora = dataAleatoria();
+    const status = Math.random() < 0.95 ? 'entregue' : 'cancelado';
+    db.run(`INSERT INTO Pedido (id_cliente, data_hora, tipo, status, valor_total) VALUES (?,?,?,?,0);`,
+      [idCliente, dataHora, tipo, status]);
+    const idPedido = db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+
+    let total = 0;
+    const nItens = randInt(1,3);
+    for(let i=0;i<nItens;i++){
+      const [idSabor, preco] = pick(sabores);
+      const tamanho = pick(tamanhos);
+      db.run(`INSERT INTO ItemPedido (id_pedido, id_sabor, tamanho, quantidade, preco_unitario) VALUES (?,?,?,1,?);`,
+        [idPedido, idSabor, tamanho, preco]);
+      total += preco;
+    }
+    db.run(`UPDATE Pedido SET valor_total=? WHERE id_pedido=?;`, [total, idPedido]);
+
+    const forma = pick(formasPagamento);
+    db.run(`INSERT INTO Pagamento (id_pedido, forma_pagamento, valor_pago, data_pagamento) VALUES (?,?,?,?);`,
+      [idPedido, forma, total, dataHora]);
+
+    if(tipo === 'delivery'){
+      const idFunc = randInt(1,2);
+      db.run(`INSERT INTO Entrega (id_pedido, id_funcionario, horario_saida, horario_chegada, endereco_entrega) VALUES (?,?,?,?,?);`,
+        [idPedido, idFunc, dataHora, dataHora, endereco]);
+    }
+  }
+
+  for(let i=0;i<80;i++) criarClientePedido('delivery');
+  for(let i=0;i<100;i++) criarClientePedido('retirada');
+
+  db.run(`
+    UPDATE Ingrediente SET quantidade_saquinhos_estoque = quantidade_saquinhos_estoque - (
+      SELECT COALESCE(SUM(cs.qtd_saquinhos_usados * ip.quantidade),0)
+      FROM ItemPedido ip
+      JOIN ComposicaoSabor cs ON ip.id_sabor = cs.id_sabor
+      JOIN Pedido pe ON ip.id_pedido = pe.id_pedido
+      WHERE cs.id_ingrediente = Ingrediente.id_ingrediente AND pe.status='entregue'
+    );
+  `);
+}
+
+function queryToRows(sql){
+  const res = db.exec(sql);
+  if(res.length === 0) return { columns: [], rows: [] };
+  return { columns: res[0].columns, rows: res[0].values };
+}
+
+function renderTable(containerId, sql){
+  const { columns, rows } = queryToRows(sql);
+  const el = document.getElementById(containerId);
+  if(columns.length === 0){ el.innerHTML = '<p style="padding:12px;color:var(--text-muted)">Sem resultados.</p>'; return; }
+  let html = '<table><thead><tr>' + columns.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+  for(const row of rows){
+    html += '<tr>' + row.map(v => `<td>${v === null ? '—' : v}</td>`).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function showMetrics(){
+  const totalClientes = queryToRows("SELECT COUNT(*) FROM Cliente").rows[0][0];
+  const delivery = queryToRows("SELECT COUNT(*) FROM Pedido WHERE tipo='delivery'").rows[0][0];
+  const retirada = queryToRows("SELECT COUNT(*) FROM Pedido WHERE tipo='retirada'").rows[0][0];
+  const totalVendido = queryToRows("SELECT ROUND(SUM(valor_total),2) FROM Pedido WHERE status='entregue'").rows[0][0];
+
+  const metrics = [
+    ["Clientes cadastrados", totalClientes],
+    ["Pedidos delivery", delivery],
+    ["Pedidos retirada", retirada],
+    ["Total vendido", "R$ " + totalVendido],
+  ];
+  document.getElementById('metrics').style.display = 'grid';
+  document.getElementById('metrics').innerHTML = metrics.map(([label,value]) =>
+    `<div class="metric"><div class="label">${label}</div><div class="value">${value}</div></div>`
+  ).join('');
+}
+
+function populateTableSelect(){
+  const tables = ["Cliente","Funcionario","Sabor","Ingrediente","ComposicaoSabor","Pedido","ItemPedido","Entrega","Pagamento"];
+  const sel = document.getElementById('tableSelect');
+  sel.innerHTML = tables.map(t => `<option value="${t}">${t}</option>`).join('');
+}
+
+function browseTable(){
+  const table = document.getElementById('tableSelect').value;
+  renderTable('browseResult', `SELECT * FROM ${table} LIMIT 50;`);
+}
+
+function runCustomQuery(){
+  const sql = document.getElementById('sqlInput').value.trim();
+  if(!sql){ return; }
+  try {
+    renderTable('queryResult', sql);
+  } catch(e) {
+    document.getElementById('queryResult').innerHTML = `<p style="padding:12px;color:#8a2020;">Erro na consulta: ${e.message}</p>`;
+  }
+}
+
+const presets = {
+  tipos: "SELECT tipo, COUNT(*) AS total_pedidos FROM Pedido GROUP BY tipo;",
+  vendas_mes: "SELECT strftime('%Y-%m', data_hora) AS mes, ROUND(SUM(valor_total),2) AS total_vendido FROM Pedido WHERE status='entregue' GROUP BY mes;",
+  estoque: "SELECT nome, quantidade_saquinhos_estoque FROM Ingrediente;",
+  debito: `SELECT i.nome AS ingrediente, SUM(cs.qtd_saquinhos_usados * ip.quantidade) AS saquinhos_consumidos
+            FROM ItemPedido ip
+            JOIN ComposicaoSabor cs ON ip.id_sabor = cs.id_sabor
+            JOIN Ingrediente i ON cs.id_ingrediente = i.id_ingrediente
+            GROUP BY i.nome;`,
+  top_sabores: `SELECT s.nome AS sabor, COUNT(*) AS vezes_pedido
+                FROM ItemPedido ip JOIN Sabor s ON ip.id_sabor = s.id_sabor
+                GROUP BY s.nome ORDER BY vezes_pedido DESC;`
+};
+
+function runPreset(key){
+  document.getElementById('sqlInput').value = presets[key];
+  renderTable('queryResult', presets[key]);
+}
+
+/* ================== PAINEL DO ADMINISTRADOR: ESTOQUE ================== */
+
+function renderIngredientesTable(){
+  renderTable('ingredientesTable',
+    "SELECT id_ingrediente, nome, peso_saquinho_padrao, quantidade_saquinhos_estoque FROM Ingrediente;");
+}
+
+function populateReporSelect(){
+  const { rows } = queryToRows("SELECT id_ingrediente, nome FROM Ingrediente;");
+  const sel = document.getElementById('reporIngSelect');
+  sel.innerHTML = rows.map(r => `<option value="${r[0]}">${r[1]}</option>`).join('');
+}
+
+function mostrarMsg(elId, texto, tipo){
+  const el = document.getElementById(elId);
+  const cor = tipo === 'erro' ? '#8a2020' : '#2f5c2a';
+  el.innerHTML = `<p style="padding:8px 0;color:${cor};font-size:14px;">${texto}</p>`;
+}
+
+function cadastrarIngrediente(){
+  const nome = document.getElementById('novoIngNome').value.trim();
+  const peso = parseFloat(document.getElementById('novoIngPeso').value);
+  const qtd = parseInt(document.getElementById('novoIngQtd').value, 10);
+
+  if(!nome || isNaN(peso) || peso <= 0 || isNaN(qtd) || qtd < 0){
+    mostrarMsg('adminMsg', 'Preencha nome, peso do saquinho (maior que 0) e quantidade em estoque (0 ou mais).', 'erro');
+    return;
+  }
+
+  db.run(`INSERT INTO Ingrediente (nome, peso_saquinho_padrao, quantidade_saquinhos_estoque) VALUES (?,?,?);`,
+    [nome, peso, qtd]);
+
+  mostrarMsg('adminMsg', `Ingrediente "${nome}" cadastrado com sucesso.`, 'ok');
+  document.getElementById('novoIngNome').value = '';
+  document.getElementById('novoIngPeso').value = '';
+  document.getElementById('novoIngQtd').value = '';
+
+  renderIngredientesTable();
+  populateReporSelect();
+}
+
+function reporEstoque(){
+  const idIng = document.getElementById('reporIngSelect').value;
+  const qtd = parseInt(document.getElementById('reporQtd').value, 10);
+
+  if(!idIng || isNaN(qtd) || qtd <= 0){
+    mostrarMsg('adminMsg', 'Escolha um ingrediente e uma quantidade maior que 0 para repor.', 'erro');
+    return;
+  }
+
+  db.run(`UPDATE Ingrediente SET quantidade_saquinhos_estoque = quantidade_saquinhos_estoque + ? WHERE id_ingrediente = ?;`,
+    [qtd, idIng]);
+
+  mostrarMsg('adminMsg', 'Estoque atualizado com sucesso.', 'ok');
+  document.getElementById('reporQtd').value = '';
+  renderIngredientesTable();
+}
+
+/* ================== ÁREA DO CLIENTE: FAZER PEDIDO ================== */
+
+let carrinho = []; // { id_sabor, nome_sabor, tamanho, quantidade, preco_unitario }
+
+function populateItemSaborSelect(){
+  const { rows } = queryToRows("SELECT id_sabor, nome, preco FROM Sabor;");
+  const sel = document.getElementById('itemSabor');
+  sel.innerHTML = rows.map(r => `<option value="${r[0]}" data-preco="${r[2]}">${r[1]} — R$ ${r[2].toFixed(2)}</option>`).join('');
+}
+
+function toggleEndereco(){
+  const tipo = document.getElementById('pedTipo').value;
+  document.getElementById('pedEndereco').style.display = (tipo === 'delivery') ? 'inline-block' : 'none';
+}
+
+function adicionarItemCarrinho(){
+  const selSabor = document.getElementById('itemSabor');
+  const idSabor = parseInt(selSabor.value, 10);
+  const nomeSabor = selSabor.options[selSabor.selectedIndex].text.split(' — ')[0];
+  const preco = parseFloat(selSabor.options[selSabor.selectedIndex].dataset.preco);
+  const tamanho = document.getElementById('itemTamanho').value;
+  const quantidade = parseInt(document.getElementById('itemQtd').value, 10);
+
+  if(isNaN(quantidade) || quantidade <= 0){
+    mostrarMsg('pedidoMsg', 'A quantidade do item precisa ser maior que 0.', 'erro');
+    return;
+  }
+
+  carrinho.push({ id_sabor: idSabor, nome_sabor: nomeSabor, tamanho, quantidade, preco_unitario: preco });
+  renderCarrinho();
+}
+
+function removerItemCarrinho(index){
+  carrinho.splice(index, 1);
+  renderCarrinho();
+}
+
+function renderCarrinho(){
+  const el = document.getElementById('carrinhoTable');
+  if(carrinho.length === 0){
+    el.innerHTML = '<p style="padding:12px;color:var(--text-muted)">Nenhum item adicionado ainda.</p>';
+    return;
+  }
+  let total = 0;
+  let html = '<table><thead><tr><th>Sabor</th><th>Tamanho</th><th>Qtd</th><th>Preço unit.</th><th>Subtotal</th><th></th></tr></thead><tbody>';
+  carrinho.forEach((item, i) => {
+    const subtotal = item.preco_unitario * item.quantidade;
+    total += subtotal;
+    html += `<tr><td>${item.nome_sabor}</td><td>${item.tamanho}</td><td>${item.quantidade}</td>
+      <td>R$ ${item.preco_unitario.toFixed(2)}</td><td>R$ ${subtotal.toFixed(2)}</td>
+      <td><button class="secondary" onclick="removerItemCarrinho(${i})">remover</button></td></tr>`;
+  });
+  html += `</tbody></table><p style="padding:8px 10px;font-weight:600;">Total: R$ ${total.toFixed(2)}</p>`;
+  el.innerHTML = html;
+}
+
+// Confere se o estoque de cada ingrediente é suficiente para os itens do carrinho.
+// Devolve { ok: true } ou { ok: false, faltando: [...] }
+function verificarEstoqueSuficiente(){
+  const necessidade = {}; // id_ingrediente -> saquinhos necessários
+
+  carrinho.forEach(item => {
+    const { rows } = queryToRows(
+      `SELECT id_ingrediente, qtd_saquinhos_usados FROM ComposicaoSabor WHERE id_sabor = ${item.id_sabor};`);
+    rows.forEach(r => {
+      const idIng = r[0], usadosPorPizza = r[1];
+      necessidade[idIng] = (necessidade[idIng] || 0) + usadosPorPizza * item.quantidade;
+    });
+  });
+
+  const faltando = [];
+  Object.keys(necessidade).forEach(idIng => {
+    const { rows } = queryToRows(
+      `SELECT nome, quantidade_saquinhos_estoque FROM Ingrediente WHERE id_ingrediente = ${idIng};`);
+    const nome = rows[0][0], estoqueAtual = rows[0][1];
+    if(estoqueAtual < necessidade[idIng]){
+      faltando.push(`${nome} (precisa de ${necessidade[idIng]}, tem ${estoqueAtual})`);
+    }
+  });
+
+  return faltando.length === 0 ? { ok: true, necessidade } : { ok: false, faltando };
+}
+
+function finalizarPedido(){
+  const nome = document.getElementById('pedNome').value.trim();
+  const telefone = document.getElementById('pedTelefone').value.trim();
+  const tipo = document.getElementById('pedTipo').value;
+  const endereco = document.getElementById('pedEndereco').value.trim();
+  const formaPagamento = document.getElementById('pedPagamento').value;
+
+  if(!nome || !telefone){
+    mostrarMsg('pedidoMsg', 'Nome e telefone do cliente são obrigatórios.', 'erro');
+    return;
+  }
+  if(tipo === 'delivery' && !endereco){
+    mostrarMsg('pedidoMsg', 'Pedidos de delivery precisam de um endereço de entrega.', 'erro');
+    return;
+  }
+  if(carrinho.length === 0){
+    mostrarMsg('pedidoMsg', 'Adicione pelo menos um item ao pedido.', 'erro');
+    return;
+  }
+
+  // Regra de negócio: só fecha o pedido se houver estoque de ingredientes suficiente.
+  const check = verificarEstoqueSuficiente();
+  if(!check.ok){
+    mostrarMsg('pedidoMsg', 'Estoque insuficiente para: ' + check.faltando.join('; ') + '.', 'erro');
+    return;
+  }
+
+  // 1) Cliente
+  db.run(`INSERT INTO Cliente (nome, telefone, endereco) VALUES (?,?,?);`,
+    [nome, telefone, tipo === 'delivery' ? endereco : null]);
+  const idCliente = db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+
+  // 2) Pedido
+  const agora = new Date();
+  const dataHora = agora.toISOString().slice(0,19).replace('T',' ');
+  const total = carrinho.reduce((s, i) => s + i.preco_unitario * i.quantidade, 0);
+  db.run(`INSERT INTO Pedido (id_cliente, data_hora, tipo, status, valor_total) VALUES (?,?,?,?,?);`,
+    [idCliente, dataHora, tipo, 'entregue', total]);
+  const idPedido = db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+
+  // 3) Itens do pedido
+  carrinho.forEach(item => {
+    db.run(`INSERT INTO ItemPedido (id_pedido, id_sabor, tamanho, quantidade, preco_unitario) VALUES (?,?,?,?,?);`,
+      [idPedido, item.id_sabor, item.tamanho, item.quantidade, item.preco_unitario]);
+  });
+
+  // 4) Pagamento
+  db.run(`INSERT INTO Pagamento (id_pedido, forma_pagamento, valor_pago, data_pagamento) VALUES (?,?,?,?);`,
+    [idPedido, formaPagamento, total, dataHora]);
+
+  // 5) Entrega (só se for delivery) — sorteia um motoboy entre os cadastrados
+  if(tipo === 'delivery'){
+    const { rows } = queryToRows("SELECT id_funcionario FROM Funcionario WHERE funcao='motoboy';");
+    const idFunc = rows.length > 0 ? pick(rows)[0] : null;
+    if(idFunc){
+      db.run(`INSERT INTO Entrega (id_pedido, id_funcionario, horario_saida, horario_chegada, endereco_entrega) VALUES (?,?,?,?,?);`,
+        [idPedido, idFunc, dataHora, null, endereco]);
+    }
+  }
+
+  // 6) Automação: debita o estoque de cada ingrediente consumido
+  Object.keys(check.necessidade).forEach(idIng => {
+    db.run(`UPDATE Ingrediente SET quantidade_saquinhos_estoque = quantidade_saquinhos_estoque - ? WHERE id_ingrediente = ?;`,
+      [check.necessidade[idIng], idIng]);
+  });
+
+  mostrarMsg('pedidoMsg', `Pedido #${idPedido} confirmado! Total: R$ ${total.toFixed(2)}.`, 'ok');
+
+  // Limpa o carrinho e atualiza tudo na tela
+  carrinho = [];
+  renderCarrinho();
+  document.getElementById('pedNome').value = '';
+  document.getElementById('pedTelefone').value = '';
+  document.getElementById('pedEndereco').value = '';
+  renderIngredientesTable();
+  populateReporSelect();
+  showMetrics();
+}
+
+init();
+</script>
+</body>
+</html>

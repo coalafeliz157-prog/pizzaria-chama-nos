@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Pizzaria Chama Nós — Fazer Pedido</title>
+<style>
+  :root { --bg: #f4f1ea; --card: #ffffff; --border: #dedad0; --text: #2c2c2a; --text-muted: #6b6a63; --accent: #9a3324; --accent-light: #f0e2dd; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; max-width: 640px; margin-inline: auto; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--text-muted); font-size: 14px; margin: 0 0 20px; }
+  .status { padding: 12px 16px; border-radius: 8px; background: var(--accent-light); color: var(--accent); font-size: 14px; margin-bottom: 20px; }
+  .status.ready { background: #e3ede0; color: #2f5c2a; }
+  .status.error { background: #f5dede; color: #8a2020; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; }
+  .panel h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  select, button, input { font-family: inherit; font-size: 14px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: white; }
+  input, select { flex: 1; min-width: 140px; }
+  button { cursor: pointer; background: var(--accent); color: white; border: none; font-weight: 500; }
+  button.secondary { background: white; color: var(--text); border: 1px solid var(--border); flex: none; }
+  button:hover { opacity: 0.9; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 6px; }
+  th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  th { background: #f0ede4; }
+  .cardapio-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 0.5px solid var(--border); font-size: 13px; }
+  .cardapio-item:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+
+<h1>Pizzaria Chama Nós</h1>
+<p class="subtitle">Faça seu pedido — delivery ou retirada no balcão</p>
+
+<div id="status" class="status">Carregando cardápio...</div>
+
+<div class="panel" id="cardapioPanel" style="display:none;">
+  <h2>Cardápio</h2>
+  <div id="cardapioLista"></div>
+</div>
+
+<div class="panel" id="pedidoPanel" style="display:none;">
+  <h2>Seus dados</h2>
+  <div class="row">
+    <input id="pedNome" type="text" placeholder="Seu nome">
+    <input id="pedTelefone" type="text" placeholder="Telefone, ex: (11) 91234-5678">
+  </div>
+  <div class="row">
+    <select id="pedTipo" onchange="toggleEndereco()">
+      <option value="delivery">Delivery (entrega)</option>
+      <option value="retirada">Retirada no balcão</option>
+    </select>
+    <input id="pedEndereco" type="text" placeholder="Endereço de entrega">
+    <select id="pedPagamento">
+      <option value="pix">Pix</option>
+      <option value="cartao">Cartão</option>
+      <option value="dinheiro">Dinheiro</option>
+    </select>
+  </div>
+
+  <h2 style="margin-top:16px;">Adicionar pizza ao pedido</h2>
+  <div class="row">
+    <select id="itemSabor"></select>
+    <select id="itemTamanho">
+      <option value="broto">Broto</option>
+      <option value="medio">Médio</option>
+      <option value="grande">Grande</option>
+    </select>
+    <input id="itemQtd" type="number" min="1" value="1" style="max-width:80px;">
+    <button class="secondary" onclick="adicionarItemCarrinho()">Adicionar</button>
+  </div>
+  <div id="carrinhoTable"></div>
+
+  <div class="row" style="margin-top:14px;">
+    <button onclick="finalizarPedido()">Confirmar pedido</button>
+  </div>
+  <div id="pedidoMsg"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/sql-wasm.js"></script>
+<script>
+/*
+  PizzariaDB — lógica compartilhada entre pizzaria_banco.html e pizzaria_pedido.html
+  Guarda o banco SQLite (sql.js) serializado no localStorage do navegador,
+  para que as duas páginas leiam e escrevam no MESMO banco.
+*/
+const PizzariaDB = (function () {
+  const KEY = "pizzaria_chama_nos_db_v2";
+
+  function save(db) {
+    const data = db.export();
+    let binary = "";
+    for (let i = 0; i < data.length; i++) binary += String.fromCharCode(data[i]);
+    localStorage.setItem(KEY, btoa(binary));
+  }
+
+  function load(SQL) {
+    const b64 = localStorage.getItem(KEY);
+    if (!b64) return null;
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new SQL.Database(bytes);
+  }
+
+  function buildSchema(db) {
+    db.run(`
+      CREATE TABLE Cliente (id_cliente INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, telefone TEXT, endereco TEXT);
+      CREATE TABLE Funcionario (id_funcionario INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, funcao TEXT NOT NULL);
+      CREATE TABLE Sabor (id_sabor INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, categoria TEXT NOT NULL, preco REAL NOT NULL);
+      CREATE TABLE Ingrediente (id_ingrediente INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, peso_saquinho_padrao REAL NOT NULL, quantidade_saquinhos_estoque INTEGER NOT NULL);
+      CREATE TABLE ComposicaoSabor (id_composicao INTEGER PRIMARY KEY AUTOINCREMENT, id_sabor INTEGER NOT NULL, id_ingrediente INTEGER NOT NULL, qtd_saquinhos_usados INTEGER NOT NULL);
+      CREATE TABLE Pedido (id_pedido INTEGER PRIMARY KEY AUTOINCREMENT, id_cliente INTEGER NOT NULL, data_hora TEXT NOT NULL, tipo TEXT NOT NULL, status TEXT NOT NULL, valor_total REAL);
+      CREATE TABLE ItemPedido (id_item INTEGER PRIMARY KEY AUTOINCREMENT, id_pedido INTEGER NOT NULL, id_sabor INTEGER NOT NULL, tamanho TEXT NOT NULL, quantidade INTEGER NOT NULL, preco_unitario REAL NOT NULL);
+      CREATE TABLE Entrega (id_entrega INTEGER PRIMARY KEY AUTOINCREMENT, id_pedido INTEGER NOT NULL UNIQUE, id_funcionario INTEGER NOT NULL, horario_saida TEXT, horario_chegada TEXT, endereco_entrega TEXT);
+      CREATE TABLE Pagamento (id_pagamento INTEGER PRIMARY KEY AUTOINCREMENT, id_pedido INTEGER NOT NULL UNIQUE, forma_pagamento TEXT NOT NULL, valor_pago REAL NOT NULL, data_pagamento TEXT);
+    `);
+  }
+
+  // Ingredientes: [nome, peso do saquinho/porção em gramas, saquinhos em estoque]
+  // 200g = ingredientes "comuns" | 120g = ingredientes "caros" (camarão, carnes nobres)
+  // pesos menores (30-50g) = coberturas usadas em pouca quantidade (azeitona, orégano, ovo, granulado)
+  const INGREDIENTES = [
+    ["Mussarela", 200, 600], ["Calabresa", 200, 400], ["Frango", 200, 350],
+    ["Presunto", 200, 300], ["Bacon", 200, 300], ["Milho", 200, 250],
+    ["Ervilha", 200, 250], ["Cebola", 200, 250], ["Champignon", 200, 200],
+    ["Palmito", 200, 200], ["Provolone", 200, 200], ["Parmesão", 200, 200],
+    ["Tomate", 200, 200],
+    ["Camarão", 120, 150], ["Carne Seca", 120, 150], ["Filé Mignon", 120, 150], ["Atum", 120, 150],
+    ["Catupiry", 150, 300], ["Azeitona", 30, 300], ["Orégano", 30, 200], ["Ovo", 50, 200],
+    ["Chocolate", 200, 250], ["Granulado", 30, 150], ["Leite Condensado", 150, 150],
+    ["Morango", 120, 120], ["Banana", 150, 150], ["Coco Ralado", 100, 120], ["Goiabada", 150, 150],
+  ];
+
+  // Sabores: [nome, categoria, preço, [[ingrediente, qtd_saquinhos], ...]]
+  const SABORES = [
+    ["Calabresa", "salgada", 38.00, [["Calabresa", 2], ["Mussarela", 2], ["Cebola", 1]]],
+    ["Mussarela", "salgada", 35.00, [["Mussarela", 3]]],
+    ["Frango com Catupiry", "salgada", 42.00, [["Frango", 1], ["Catupiry", 2], ["Mussarela", 1]]],
+    ["Portuguesa", "salgada", 44.00, [["Presunto", 1], ["Mussarela", 2], ["Ovo", 1], ["Ervilha", 1], ["Cebola", 1], ["Azeitona", 1]]],
+    ["Carne Seca", "salgada", 48.00, [["Carne Seca", 2], ["Mussarela", 1], ["Cebola", 1], ["Catupiry", 1]]],
+    ["Camarão", "salgada", 52.00, [["Camarão", 2], ["Mussarela", 2], ["Catupiry", 1]]],
+    ["Quatro Queijos", "salgada", 46.00, [["Mussarela", 2], ["Catupiry", 1], ["Provolone", 1], ["Parmesão", 1]]],
+    ["Napolitana", "salgada", 36.00, [["Mussarela", 2], ["Tomate", 1], ["Orégano", 1]]],
+    ["Baiana", "salgada", 40.00, [["Calabresa", 2], ["Mussarela", 1], ["Cebola", 1]]],
+    ["À Moda da Casa", "salgada", 45.00, [["Bacon", 1], ["Milho", 1], ["Ervilha", 1], ["Mussarela", 2]]],
+    ["Palmito", "salgada", 44.00, [["Palmito", 2], ["Mussarela", 1]]],
+    ["Atum", "salgada", 46.00, [["Atum", 1], ["Mussarela", 2], ["Cebola", 1]]],
+    ["Filé Mignon com Catupiry", "salgada", 50.00, [["Filé Mignon", 2], ["Catupiry", 1], ["Mussarela", 1]]],
+    ["Chocolate", "doce", 38.00, [["Chocolate", 3], ["Granulado", 1]]],
+    ["Banana com Canela", "doce", 36.00, [["Banana", 3], ["Chocolate", 1]]],
+    ["Prestígio", "doce", 40.00, [["Chocolate", 2], ["Coco Ralado", 1], ["Leite Condensado", 1]]],
+    ["Romeu e Julieta", "doce", 38.00, [["Goiabada", 2], ["Mussarela", 2]]],
+    ["Morango com Chocolate", "doce", 42.00, [["Morango", 2], ["Chocolate", 2], ["Leite Condensado", 1]]],
+  ];
+
+  const NOMES = ["Ana","Bruno","Carla","Daniel","Elaine","Felipe","Gabriela","Henrique","Isabela","João",
+  "Karina","Lucas","Mariana","Nicolas","Otavio","Patricia","Rafael","Sabrina","Thiago","Vanessa",
+  "Camila","Diego","Eduarda","Fabio","Giovanna","Hugo","Ingrid","Jonas","Larissa","Mateus"];
+  const SOBRENOMES = ["Silva","Souza","Oliveira","Santos","Pereira","Costa","Rodrigues","Almeida","Nascimento","Lima",
+  "Araujo","Fernandes","Carvalho","Gomes","Martins","Rocha","Ribeiro","Alves","Monteiro","Cardoso"];
+  const RUAS = ["Rua das Flores","Av. Brasil","Rua Sete de Setembro","Rua XV de Novembro","Av. Paulista",
+  "Rua dos Pinheiros","Rua Barão do Rio Branco","Av. Getúlio Vargas","Rua São João","Rua Marechal Deodoro"];
+
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+  function nomeFicticio() { return `${pick(NOMES)} ${pick(SOBRENOMES)}`; }
+  function telefoneFicticio() { return `(11) 9${randInt(1000, 9999)}-${randInt(1000, 9999)}`; }
+  function enderecoFicticio() { return `${pick(RUAS)}, ${randInt(10, 999)}`; }
+  function pad(n) { return n.toString().padStart(2, "0"); }
+  function dataAleatoria() {
+    const dia = randInt(1, 26), hora = randInt(18, 23), min = randInt(0, 59);
+    return `2026-08-${pad(dia)} ${pad(hora)}:${pad(min)}:00`;
+  }
+
+  function lastId(db) {
+    return db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+  }
+
+  function seedData(db) {
+    db.run(`INSERT INTO Funcionario (nome, funcao) VALUES
+      ('Marcos Silva','motoboy'), ('Renato Costa','motoboy'),
+      ('Patricia Gomes','atendente'), ('Bruno Tavares','cozinheiro');`);
+
+    INGREDIENTES.forEach(([nome, peso, qtd]) => {
+      db.run(`INSERT INTO Ingrediente (nome, peso_saquinho_padrao, quantidade_saquinhos_estoque) VALUES (?,?,?);`, [nome, peso, qtd]);
+    });
+
+    const idIngrediente = {};
+    const res = db.exec("SELECT id_ingrediente, nome FROM Ingrediente");
+    res[0].values.forEach(([id, nome]) => { idIngrediente[nome] = id; });
+
+    const idSabor = {};
+    SABORES.forEach(([nome, categoria, preco, composicao]) => {
+      db.run(`INSERT INTO Sabor (nome, categoria, preco) VALUES (?,?,?);`, [nome, categoria, preco]);
+      const id = lastId(db);
+      idSabor[nome] = id;
+      composicao.forEach(([ingNome, qtd]) => {
+        db.run(`INSERT INTO ComposicaoSabor (id_sabor, id_ingrediente, qtd_saquinhos_usados) VALUES (?,?,?);`,
+          [id, idIngrediente[ingNome], qtd]);
+      });
+    });
+
+    const saboresLista = SABORES.map(([nome, , preco]) => [idSabor[nome], preco]);
+    const tamanhos = ["broto", "medio", "grande"];
+    const formasPagamento = ["pix", "cartao", "dinheiro"];
+
+    function criarClientePedido(tipo) {
+      const nome = nomeFicticio();
+      const telefone = telefoneFicticio();
+      const endereco = tipo === "delivery" ? enderecoFicticio() : null;
+      db.run(`INSERT INTO Cliente (nome, telefone, endereco) VALUES (?,?,?);`, [nome, telefone, endereco]);
+      const idCliente = lastId(db);
+
+      const dataHora = dataAleatoria();
+      const status = Math.random() < 0.95 ? "entregue" : "cancelado";
+      db.run(`INSERT INTO Pedido (id_cliente, data_hora, tipo, status, valor_total) VALUES (?,?,?,?,0);`,
+        [idCliente, dataHora, tipo, status]);
+      const idPedido = lastId(db);
+
+      let total = 0;
+      const nItens = randInt(1, 3);
+      for (let i = 0; i < nItens; i++) {
+        const [idSab, preco] = pick(saboresLista);
+        const tamanho = pick(tamanhos);
+        db.run(`INSERT INTO ItemPedido (id_pedido, id_sabor, tamanho, quantidade, preco_unitario) VALUES (?,?,?,1,?);`,
+          [idPedido, idSab, tamanho, preco]);
+        total += preco;
+      }
+      db.run(`UPDATE Pedido SET valor_total=? WHERE id_pedido=?;`, [total, idPedido]);
+
+      const forma = pick(formasPagamento);
+      db.run(`INSERT INTO Pagamento (id_pedido, forma_pagamento, valor_pago, data_pagamento) VALUES (?,?,?,?);`,
+        [idPedido, forma, total, dataHora]);
+
+      if (tipo === "delivery") {
+        const idFunc = randInt(1, 2);
+        db.run(`INSERT INTO Entrega (id_pedido, id_funcionario, horario_saida, horario_chegada, endereco_entrega) VALUES (?,?,?,?,?);`,
+          [idPedido, idFunc, dataHora, dataHora, endereco]);
+      }
+    }
+
+    for (let i = 0; i < 80; i++) criarClientePedido("delivery");
+    for (let i = 0; i < 100; i++) criarClientePedido("retirada");
+
+    db.run(`
+      UPDATE Ingrediente SET quantidade_saquinhos_estoque = quantidade_saquinhos_estoque - (
+        SELECT COALESCE(SUM(cs.qtd_saquinhos_usados * ip.quantidade),0)
+        FROM ItemPedido ip
+        JOIN ComposicaoSabor cs ON ip.id_sabor = cs.id_sabor
+        JOIN Pedido pe ON ip.id_pedido = pe.id_pedido
+        WHERE cs.id_ingrediente = Ingrediente.id_ingrediente AND pe.status='entregue'
+      );
+    `);
+  }
+
+  return { KEY, save, load, buildSchema, seedData, pick, randInt };
+})();
+
+</script>
+<script>
+let db;
+let SQLref;
+const statusEl = document.getElementById("status");
+let carrinho = [];
+
+async function init(){
+  try {
+    SQLref = await initSqlJs({ locateFile: f => `https://cdn.jsdelivr.net/npm/sql.js@1.10.3/dist/${f}` });
+    const loaded = PizzariaDB.load(SQLref);
+    if(!loaded){
+      statusEl.textContent = "Nenhum banco encontrado ainda. Abra primeiro a página pizzaria_banco.html (no mesmo navegador) para criar os dados iniciais, depois volte aqui.";
+      statusEl.className = "status error";
+      return;
+    }
+    db = loaded;
+    statusEl.textContent = "Cardápio carregado! Monte seu pedido abaixo.";
+    statusEl.className = "status ready";
+    renderCardapio();
+    populateItemSaborSelect();
+    toggleEndereco();
+    document.getElementById("cardapioPanel").style.display = "block";
+    document.getElementById("pedidoPanel").style.display = "block";
+  } catch(e){
+    statusEl.textContent = "Erro ao carregar: " + e.message;
+    statusEl.className = "status error";
+  }
+}
+
+function queryToRows(sql){
+  const res = db.exec(sql);
+  if(res.length === 0) return { columns: [], rows: [] };
+  return { columns: res[0].columns, rows: res[0].values };
+}
+
+function renderCardapio(){
+  const { rows } = queryToRows("SELECT nome, categoria, preco FROM Sabor ORDER BY categoria, nome;");
+  const el = document.getElementById("cardapioLista");
+  el.innerHTML = rows.map(r =>
+    `<div class="cardapio-item"><span>${r[0]} <span style="color:var(--text-muted)">(${r[1]})</span></span><span>R$ ${r[2].toFixed(2)}</span></div>`
+  ).join("");
+}
+
+function populateItemSaborSelect(){
+  const { rows } = queryToRows("SELECT id_sabor, nome, preco FROM Sabor ORDER BY nome;");
+  const sel = document.getElementById("itemSabor");
+  sel.innerHTML = rows.map(r => `<option value="${r[0]}" data-preco="${r[2]}">${r[1]} — R$ ${r[2].toFixed(2)}</option>`).join("");
+}
+
+function toggleEndereco(){
+  const tipo = document.getElementById("pedTipo").value;
+  document.getElementById("pedEndereco").style.display = (tipo === "delivery") ? "inline-block" : "none";
+}
+
+function mostrarMsg(elId, texto, tipo){
+  const cor = tipo === "erro" ? "#8a2020" : "#2f5c2a";
+  document.getElementById(elId).innerHTML = `<p style="padding:8px 0;color:${cor};font-size:14px;">${texto}</p>`;
+}
+
+function adicionarItemCarrinho(){
+  const sel = document.getElementById("itemSabor");
+  const idSabor = parseInt(sel.value, 10);
+  const nomeSabor = sel.options[sel.selectedIndex].text.split(" — ")[0];
+  const preco = parseFloat(sel.options[sel.selectedIndex].dataset.preco);
+  const tamanho = document.getElementById("itemTamanho").value;
+  const quantidade = parseInt(document.getElementById("itemQtd").value, 10);
+  if(isNaN(quantidade) || quantidade <= 0){
+    mostrarMsg("pedidoMsg", "A quantidade precisa ser maior que 0.", "erro");
+    return;
+  }
+  carrinho.push({ id_sabor: idSabor, nome_sabor: nomeSabor, tamanho, quantidade, preco_unitario: preco });
+  renderCarrinho();
+}
+
+function removerItemCarrinho(i){ carrinho.splice(i,1); renderCarrinho(); }
+
+function renderCarrinho(){
+  const el = document.getElementById("carrinhoTable");
+  if(carrinho.length === 0){ el.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">Nenhum item ainda.</p>'; return; }
+  let total = 0;
+  let html = '<table><thead><tr><th>Sabor</th><th>Tam.</th><th>Qtd</th><th>Subtotal</th><th></th></tr></thead><tbody>';
+  carrinho.forEach((item,i) => {
+    const subtotal = item.preco_unitario * item.quantidade;
+    total += subtotal;
+    html += `<tr><td>${item.nome_sabor}</td><td>${item.tamanho}</td><td>${item.quantidade}</td><td>R$ ${subtotal.toFixed(2)}</td><td><button class="secondary" onclick="removerItemCarrinho(${i})">x</button></td></tr>`;
+  });
+  html += `</tbody></table><p style="font-weight:600;margin-top:8px;">Total: R$ ${total.toFixed(2)}</p>`;
+  el.innerHTML = html;
+}
+
+function verificarEstoqueSuficiente(){
+  const necessidade = {};
+  carrinho.forEach(item => {
+    const { rows } = queryToRows(`SELECT id_ingrediente, qtd_saquinhos_usados FROM ComposicaoSabor WHERE id_sabor = ${item.id_sabor};`);
+    rows.forEach(r => { necessidade[r[0]] = (necessidade[r[0]] || 0) + r[1] * item.quantidade; });
+  });
+  const faltando = [];
+  Object.keys(necessidade).forEach(idIng => {
+    const { rows } = queryToRows(`SELECT nome, quantidade_saquinhos_estoque FROM Ingrediente WHERE id_ingrediente = ${idIng};`);
+    if(rows[0][1] < necessidade[idIng]) faltando.push(`${rows[0][0]} (precisa ${necessidade[idIng]}, tem ${rows[0][1]})`);
+  });
+  return faltando.length === 0 ? { ok: true, necessidade } : { ok: false, faltando };
+}
+
+function finalizarPedido(){
+  const nome = document.getElementById("pedNome").value.trim();
+  const telefone = document.getElementById("pedTelefone").value.trim();
+  const tipo = document.getElementById("pedTipo").value;
+  const endereco = document.getElementById("pedEndereco").value.trim();
+  const forma = document.getElementById("pedPagamento").value;
+
+  if(!nome || !telefone){ mostrarMsg("pedidoMsg", "Nome e telefone são obrigatórios.", "erro"); return; }
+  if(tipo === "delivery" && !endereco){ mostrarMsg("pedidoMsg", "Informe o endereço para delivery.", "erro"); return; }
+  if(carrinho.length === 0){ mostrarMsg("pedidoMsg", "Adicione pelo menos uma pizza.", "erro"); return; }
+
+  const check = verificarEstoqueSuficiente();
+  if(!check.ok){ mostrarMsg("pedidoMsg", "Estoque insuficiente: " + check.faltando.join("; "), "erro"); return; }
+
+  db.run(`INSERT INTO Cliente (nome, telefone, endereco) VALUES (?,?,?);`, [nome, telefone, tipo === "delivery" ? endereco : null]);
+  const idCliente = db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+
+  const agora = new Date();
+  const dataHora = agora.toISOString().slice(0,19).replace("T"," ");
+  const total = carrinho.reduce((s,i) => s + i.preco_unitario * i.quantidade, 0);
+  db.run(`INSERT INTO Pedido (id_cliente, data_hora, tipo, status, valor_total) VALUES (?,?,?,?,?);`, [idCliente, dataHora, tipo, "entregue", total]);
+  const idPedido = db.exec("SELECT last_insert_rowid()")[0].values[0][0];
+
+  carrinho.forEach(item => {
+    db.run(`INSERT INTO ItemPedido (id_pedido, id_sabor, tamanho, quantidade, preco_unitario) VALUES (?,?,?,?,?);`,
+      [idPedido, item.id_sabor, item.tamanho, item.quantidade, item.preco_unitario]);
+  });
+
+  db.run(`INSERT INTO Pagamento (id_pedido, forma_pagamento, valor_pago, data_pagamento) VALUES (?,?,?,?);`, [idPedido, forma, total, dataHora]);
+
+  if(tipo === "delivery"){
+    const { rows } = queryToRows("SELECT id_funcionario FROM Funcionario WHERE funcao='motoboy';");
+    const idFunc = rows.length > 0 ? PizzariaDB.pick(rows)[0] : null;
+    if(idFunc){
+      db.run(`INSERT INTO Entrega (id_pedido, id_funcionario, horario_saida, endereco_entrega) VALUES (?,?,?,?);`, [idPedido, idFunc, dataHora, endereco]);
+    }
+  }
+
+  Object.keys(check.necessidade).forEach(idIng => {
+    db.run(`UPDATE Ingrediente SET quantidade_saquinhos_estoque = quantidade_saquinhos_estoque - ? WHERE id_ingrediente = ?;`, [check.necessidade[idIng], idIng]);
+  });
+
+  PizzariaDB.save(db);
+
+  mostrarMsg("pedidoMsg", `Pedido #${idPedido} confirmado! Total: R$ ${total.toFixed(2)}. Você pode conferir na página do banco de dados.`, "ok");
+  carrinho = [];
+  renderCarrinho();
+  document.getElementById("pedNome").value = "";
+  document.getElementById("pedTelefone").value = "";
+  document.getElementById("pedEndereco").value = "";
+}
+
+init();
+</script>
+</body>
+</html>
